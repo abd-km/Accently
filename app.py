@@ -84,6 +84,10 @@ SUPPORTED_ACCENTS = [
 def cleanup_temp_dir(temp_dir_path):
     if temp_dir_path and os.path.exists(temp_dir_path):
         try:
+            # Check if this is a persistent directory we want to keep
+            if ".streamlit/temp" in str(temp_dir_path):
+                # Don't delete persistent cache directories
+                return
             shutil.rmtree(temp_dir_path)
         except Exception as e:
             st.warning(f"Could not clean up temporary directory {temp_dir_path}: {e}")
@@ -91,8 +95,16 @@ def cleanup_temp_dir(temp_dir_path):
 @st.cache_data(ttl=3600)  # Cache for 1 hour to avoid redownloading the same video
 def cached_download_video(url):
     """Cached version of video download to improve performance for repeated URLs"""
-    temp_dir = tempfile.mkdtemp(prefix="video_dl_")
+    # Use a more stable temp directory within the Streamlit cache
+    temp_dir = os.path.join(os.getcwd(), ".streamlit", "temp", f"video_{hash(url) % 10000}")
+    os.makedirs(temp_dir, exist_ok=True)
+    
     output_path = os.path.join(temp_dir, "video.mp4")
+    
+    # If the file already exists and is recent (within 1 hour), use it
+    if os.path.exists(output_path) and (time.time() - os.path.getmtime(output_path)) < 3600:
+        file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        return output_path, temp_dir, file_size_mb
     
     # Set file size limit to 300MB (300 * 1024 * 1024 bytes)
     file_size_limit = 300 * 1024 * 1024
@@ -388,9 +400,19 @@ with tab1:
                 video_path, video_temp_dir = download_video(video_url)
 
             if video_path:
-                # Display video preview
+                # Display video preview with robust error handling
                 st.subheader("Video Preview")
-                st.video(video_path)
+                try:
+                    # First verify the file exists and is readable
+                    with open(video_path, 'rb') as f:
+                        # Read just the first few bytes to confirm it's accessible
+                        _ = f.read(1024)
+                    
+                    # Now display it
+                    st.video(video_path)
+                except Exception as video_err:
+                    st.error(f"Could not display video preview: {video_err}")
+                    # Try to continue with audio extraction even if preview fails
                 
                 with progress_container:
                     # Step 2: Extract audio
