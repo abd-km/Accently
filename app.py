@@ -13,6 +13,7 @@ import torch # SpeechBrain dependency
 from speechbrain.inference import EncoderClassifier
 import time
 import gc  # Garbage collection for better memory management
+import traceback  # For error logging
 
 # --- Configuration & Model Loading ---
 # Use Streamlit's caching to load the model only once and reuse it.
@@ -96,17 +97,27 @@ def cached_download_video(url):
     # Set file size limit to 300MB (300 * 1024 * 1024 bytes)
     file_size_limit = 300 * 1024 * 1024
     
-    # Simpler options that are more likely to work
+    # Updated options with better format selection and cache management
     ydl_opts = {
-        'format': 'best[filesize<300M][ext=mp4]/best[filesize<300M]',  # Limit file size
+        'format': 'best[height<=720][filesize<300M]/best[filesize<300M]/best[height<=480]/best',  # More flexible format selection
         'outtmpl': output_path,
         'noplaylist': True,
         'quiet': True,  # Less verbose output
-        'max_filesize': file_size_limit  # Set maximum file size
+        'max_filesize': file_size_limit,  # Set maximum file size
+        'no_cache_dir': True,  # Prevent caching issues that cause format errors
+        'extract_flat': False,
+        'ignoreerrors': False
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Clear any existing cache before download (if available)
+            if hasattr(ydl, 'cache') and hasattr(ydl.cache, 'remove'):
+                try:
+                    ydl.cache.remove()
+                except:
+                    pass  # Ignore if cache removal fails
+            
             ydl.download([url])
         
         # Check if file exists and has reasonable size
@@ -118,6 +129,7 @@ def cached_download_video(url):
             return None, None, 0
             
     except Exception as e:
+        print(f"yt-dlp download error: {e}")
         cleanup_temp_dir(temp_dir)
         return None, None, 0
 
@@ -298,13 +310,11 @@ def analyze_accent_speechbrain(audio_path, classifier):
             return detected_accent, confidence_percentage, summary
             
         except Exception as unpack_e:
-            import traceback
             print(f"Error unpacking results: {unpack_e}")
             print(f"Traceback: {traceback.format_exc()}")
             return "Error", 0, f"Analysis failed: Unable to process model output - {unpack_e}"
 
     except Exception as e:
-        import traceback
         st.error(f"Error during SpeechBrain accent analysis: {type(e).__name__} - {e}")
         print(f"Full error: {traceback.format_exc()}")
         return "Error", 0, f"Analysis failed: {e}"
