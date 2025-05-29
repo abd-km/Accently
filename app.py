@@ -51,12 +51,25 @@ def load_accent_classifier():
 
 accent_classifier = load_accent_classifier()
 
-# Display loading status after model is loaded
-if accent_classifier is not None:
-    st.success("Accent Classifier loaded successfully.")
-else:
-    st.error("The accent classifier model could not be loaded. This might be due to network issues or compatibility problems.")
-    st.error("Please check your internet connection and try refreshing. If the problem persists, the model source or dependencies might need attention.")
+# Model status section
+status_container = st.container()
+with status_container:
+    if accent_classifier is not None:
+        st.success("**Accent Classifier Ready** - AI model loaded successfully and ready for analysis")
+    else:
+        st.error("**Model Loading Failed** - The accent classifier could not be initialized")
+        st.warning("""
+        **Possible causes:**
+        - Network connectivity issues preventing model download
+        - Insufficient system resources
+        - Dependency compatibility problems
+        
+        **Please try:**
+        - Refreshing the page
+        - Checking your internet connection
+        - Waiting a moment for the model to download
+        """)
+        st.stop()
 
 # Supported accents by the model (for user information)
 SUPPORTED_ACCENTS = [
@@ -146,7 +159,7 @@ def extract_audio(video_path, max_duration=60):
             # Limit to first max_duration seconds for faster processing
             duration = min(max_duration, video_clip.duration)
             if duration < video_clip.duration:
-                st.info(f"⏱️ Using only the first {duration} seconds of audio for faster analysis.")
+                st.info(f"Using only the first {duration} seconds of audio for faster analysis.")
                 video_clip = video_clip.subclip(0, duration)
             
             # Extract as WAV, mono, 16kHz (SpeechBrain default)
@@ -297,68 +310,146 @@ def analyze_accent_speechbrain(audio_path, classifier):
         return "Error", 0, f"Analysis failed: {e}"
 
 # --- Streamlit UI ---
-st.image("https://remwaste.com/wp-content/uploads/2023/08/REM-Waste-Logo-Dark.png", width=200)
-st.title("🗣️ Accently - English Accent Analyzer")
+st.title("🎯 Accently")
+st.subheader("AI-Powered English Accent Analysis")
 
-st.markdown(f"""
-This tool analyzes a speaker's English accent from a video URL using a pre-trained AI model.
-It can identify among the following **{len(SUPPORTED_ACCENTS)} English accents**: `{(", ".join(SUPPORTED_ACCENTS))}`.
-""")
+# Hero section with app description
+with st.container():
+    st.markdown("""
+    **Analyze English accents from video content using advanced AI technology.**
+    
+    This application uses a state-of-the-art SpeechBrain ECAPA-TDNN model to identify speakers' English accents from video or audio content.
+    """)
+
+# Supported accents section
+with st.expander("Supported Accent Regions", expanded=False):
+    cols = st.columns(4)
+    accent_display = [accent.replace('_', ' ').title() for accent in SUPPORTED_ACCENTS]
+    
+    for i, accent in enumerate(accent_display):
+        with cols[i % 4]:
+            st.write(f"• {accent}")
+
+st.divider()
 
 # Add file upload option alongside URL
-st.write("### Upload or link to a video")
-tab1, tab2 = st.tabs(["Video URL", "Upload Video"])
+st.header("Choose Your Input Method")
+st.markdown("Select how you'd like to provide your video content:")
+
+tab1, tab2 = st.tabs(["Video URL", "Upload Video File"])
 
 with tab1:
-    video_url = st.text_input("Enter public video URL (YouTube, Loom, direct MP4, etc.):", 
-                              placeholder="e.g., https://www.youtube.com/watch?v=...")
-    analyze_from_url = st.button("Analyze URL", type="primary", use_container_width=True)
+    st.markdown("**Enter a public video URL from platforms like YouTube, Vimeo, or direct MP4 links**")
+    
+    with st.container():
+        video_url = st.text_input(
+            "Video URL", 
+            placeholder="https://www.youtube.com/watch?v=example",
+            help="Paste any public video URL here. The video will be processed automatically."
+        )
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            analyze_from_url = st.button(
+                "Analyze Video from URL", 
+                type="primary", 
+                use_container_width=True,
+                disabled=not video_url
+            )
     
     if video_url and analyze_from_url:
         if accent_classifier is None:
-            st.error("The accent classification model could not be loaded. The application cannot proceed.")
+            st.error("The accent classification model could not be loaded. Please refresh the page and try again.")
             st.stop()
             
         video_path, video_temp_dir = None, None
         audio_path, audio_temp_dir = None, None
         
+        progress_container = st.container()
+        
         try:
-            with st.spinner("Step 1/3: Downloading video... This may take a moment."):
+            with progress_container:
+                # Step 1: Download
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                status_text.text("Downloading video...")
+                progress_bar.progress(10)
                 video_path, video_temp_dir = download_video(video_url)
 
             if video_path:
+                # Display video preview
+                st.subheader("Video Preview")
                 st.video(video_path)
-                with st.spinner("Step 2/3: Extracting audio..."):
+                
+                with progress_container:
+                    # Step 2: Extract audio
+                    status_text.text("Extracting audio...")
+                    progress_bar.progress(40)
                     audio_path, audio_temp_dir = extract_audio(video_path)
 
                 if audio_path:
+                    # Display audio preview
+                    st.subheader("Extracted Audio")
                     st.audio(audio_path, format='audio/wav')
-                    with st.spinner("Step 3/3: Analyzing accent with AI model..."):
+                    
+                    with progress_container:
+                        # Step 3: Analyze
+                        status_text.text("Analyzing accent with AI...")
+                        progress_bar.progress(70)
                         accent, confidence, summary = analyze_accent_speechbrain(audio_path, accent_classifier)
+                        progress_bar.progress(100)
+                        status_text.text("Analysis complete!")
 
-                    st.subheader("📊 Accent Analysis Results")
+                    # Results section
+                    st.divider()
+                    st.header("Analysis Results")
+                    
                     if accent not in ["Unknown", "Error"]:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric(label="Detected English Accent", value=accent.upper())
-                        with col2:
-                            st.metric(label="Confidence Score", value=f"{confidence:.2f}%")
+                        # Success case - show metrics in a nice layout
+                        result_col1, result_col2 = st.columns(2)
                         
+                        with result_col1:
+                            st.metric(
+                                label="Detected Accent", 
+                                value=accent.replace('_', ' ').title(),
+                                help="The most likely English accent identified by the AI model"
+                            )
+                        
+                        with result_col2:
+                            confidence_color = "normal" if confidence >= 70 else "inverse"
+                            st.metric(
+                                label="Confidence Level", 
+                                value=f"{confidence:.1f}%",
+                                help="How confident the model is in this prediction"
+                            )
+                        
+                        # Confidence interpretation
+                        if confidence >= 80:
+                            st.success("**High Confidence**: The model is very confident in this accent classification.")
+                        elif confidence >= 60:
+                            st.info("**Moderate Confidence**: Good prediction, but some uncertainty remains.")
+                        else:
+                            st.warning("**Lower Confidence**: Results should be interpreted with caution.")
+                        
+                        # Detailed analysis in expandable section
                         with st.expander("View Detailed Analysis", expanded=False):
-                            st.text_area("Analysis Details", summary, height=200)
+                            st.markdown("**Full Analysis Report:**")
+                            st.text_area("", summary, height=200, disabled=True)
                             
-                        if confidence < 60:
-                            st.warning("The confidence score is moderate. This could be due to mixed accent features, audio clarity issues, or an accent not well-represented in the model's training data.")
                     elif accent == "Error":
-                        st.error(f"Accent analysis failed. Reason: {summary}")
+                        st.error("**Analysis Failed**")
+                        st.error(f"**Reason:** {summary}")
+                        
                     else: # Unknown
+                        st.warning("**Uncertain Result**")
                         st.warning("Could not determine a specific English accent from the supported categories.")
-                        with st.expander("View Analysis Log", expanded=True):
-                            st.text_area("Analysis Details", summary, height=200)
+                        with st.expander("View Analysis Details", expanded=True):
+                            st.text_area("Analysis Log", summary, height=150, disabled=True)
                 else:
-                    st.error("❌ Failed to extract audio from the video.")
+                    st.error("**Audio Extraction Failed** - Could not extract audio from the video.")
             else:
-                st.error("❌ Failed to download the video. Please check the URL and ensure it's publicly accessible.")
+                st.error("**Download Failed** - Please verify the URL is accessible and try again.")
         
         finally:
             # Cleanup
@@ -368,57 +459,124 @@ with tab1:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-    else:
-        st.warning("⚠️ Please enter a video URL to analyze.")
+            
+            # Clear progress indicators
+            if 'progress_bar' in locals():
+                progress_bar.empty()
+            if 'status_text' in locals():
+                status_text.empty()
+                
+    elif not video_url and analyze_from_url:
+        st.warning("Please enter a video URL before analyzing.")
 
 with tab2:
-    uploaded_file = st.file_uploader("Upload a video file (MP4, MOV, AVI, etc.)", type=["mp4", "mov", "avi", "mkv", "webm"])
-    analyze_from_upload = st.button("Analyze Upload", type="primary", use_container_width=True)
+    st.markdown("**Upload a video file directly from your device**")
+    
+    with st.container():
+        uploaded_file = st.file_uploader(
+            "Choose a video file", 
+            type=["mp4", "mov", "avi", "mkv", "webm"],
+            help="Supported formats: MP4, MOV, AVI, MKV, WebM (max 300MB recommended)"
+        )
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            analyze_from_upload = st.button(
+                "Analyze Uploaded Video", 
+                type="primary", 
+                use_container_width=True,
+                disabled=uploaded_file is None
+            )
     
     if uploaded_file is not None and analyze_from_upload:
         if accent_classifier is None:
-            st.error("The accent classification model could not be loaded. The application cannot proceed.")
+            st.error("The accent classification model could not be loaded. Please refresh the page and try again.")
             st.stop()
             
         video_temp_dir = tempfile.mkdtemp(prefix="upload_")
         video_path = os.path.join(video_temp_dir, "uploaded_video.mp4")
         audio_path, audio_temp_dir = None, None
         
+        # Create a progress container
+        progress_container = st.container()
+        
         try:
             # Save the uploaded file
             with open(video_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             
+            # Display video preview
+            st.subheader("Uploaded Video Preview")
             st.video(video_path)
-            with st.spinner("Step 1/2: Extracting audio..."):
+            
+            with progress_container:
+                # Step 1: Extract audio
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                status_text.text("Extracting audio...")
+                progress_bar.progress(30)
                 audio_path, audio_temp_dir = extract_audio(video_path)
 
             if audio_path:
+                # Display audio preview
+                st.subheader("Extracted Audio")
                 st.audio(audio_path, format='audio/wav')
-                with st.spinner("Step 2/2: Analyzing accent with AI model..."):
+                
+                with progress_container:
+                    # Step 2: Analyze
+                    status_text.text("Analyzing accent with AI...")
+                    progress_bar.progress(70)
                     accent, confidence, summary = analyze_accent_speechbrain(audio_path, accent_classifier)
+                    progress_bar.progress(100)
+                    status_text.text("Analysis complete!")
 
-                st.subheader("📊 Accent Analysis Results")
+                # Results section
+                st.divider()
+                st.header("Analysis Results")
+                
                 if accent not in ["Unknown", "Error"]:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric(label="Detected English Accent", value=accent.upper())
-                    with col2:
-                        st.metric(label="Confidence Score", value=f"{confidence:.2f}%")
+                    # Success case - show metrics in a nice layout
+                    result_col1, result_col2 = st.columns(2)
                     
+                    with result_col1:
+                        st.metric(
+                            label="Detected Accent", 
+                            value=accent.replace('_', ' ').title(),
+                            help="The most likely English accent identified by the AI model"
+                        )
+                    
+                    with result_col2:
+                        st.metric(
+                            label="Confidence Level", 
+                            value=f"{confidence:.1f}%",
+                            help="How confident the model is in this prediction"
+                        )
+                    
+                    # Confidence interpretation
+                    if confidence >= 80:
+                        st.success("**High Confidence**: The model is very confident in this accent classification.")
+                    elif confidence >= 60:
+                        st.info("**Moderate Confidence**: Good prediction, but some uncertainty remains.")
+                    else:
+                        st.warning("**Lower Confidence**: Results should be interpreted with caution.")
+                    
+                    # Detailed analysis in expandable section
                     with st.expander("View Detailed Analysis", expanded=False):
-                        st.text_area("Analysis Details", summary, height=200)
+                        st.markdown("**Full Analysis Report:**")
+                        st.text_area("", summary, height=200, disabled=True)
                         
-                    if confidence < 60:
-                        st.warning("The confidence score is moderate. This could be due to mixed accent features, audio clarity issues, or an accent not well-represented in the model's training data.")
                 elif accent == "Error":
-                    st.error(f"Accent analysis failed. Reason: {summary}")
+                    st.error("**Analysis Failed**")
+                    st.error(f"**Reason:** {summary}")
+                    
                 else: # Unknown
+                    st.warning("**Uncertain Result**")
                     st.warning("Could not determine a specific English accent from the supported categories.")
-                    with st.expander("View Analysis Log", expanded=True):
-                        st.text_area("Analysis Details", summary, height=200)
+                    with st.expander("View Analysis Details", expanded=True):
+                        st.text_area("Analysis Log", summary, height=150, disabled=True)
             else:
-                st.error("❌ Failed to extract audio from the video.")
+                st.error("**Audio Extraction Failed** - Could not extract audio from the video.")
         
         finally:
             # Cleanup
@@ -428,19 +586,63 @@ with tab2:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            
+            # Clear progress indicators
+            if 'progress_bar' in locals():
+                progress_bar.empty()
+            if 'status_text' in locals():
+                status_text.empty()
 
-st.markdown("---")
-st.markdown("""
-**Disclaimer:** Accent classification is complex. This tool provides an estimation based on a SpeechBrain ECAPA-TDNN model trained on the CommonAccent dataset. 
-Results depend on audio quality, speaker clarity, background noise, and model limitations. This tool is a proof-of-concept.
-""")
+st.divider()
 
-# Add footer with GitHub link
-st.markdown("""
-<div style="text-align: center; margin-top: 20px;">
-    <p>
-        <a href="https://github.com/abd-km/Accently" target="_blank">View on GitHub</a> | 
-        Built with SpeechBrain & Streamlit
-    </p>
-</div>
-""", unsafe_allow_html=True)
+# Information section
+st.header("About This Tool")
+
+info_col1, info_col2 = st.columns(2)
+
+with info_col1:
+    st.subheader("Technology")
+    st.markdown("""
+    - **AI Model**: SpeechBrain ECAPA-TDNN
+    - **Training Data**: CommonAccent Dataset
+    - **Processing**: Real-time audio analysis
+    - **Accuracy**: Research-grade classification
+    """)
+
+with info_col2:
+    st.subheader("Usage Tips")
+    st.markdown("""
+    - **Audio Quality**: Clear speech works best
+    - **Duration**: 30-60 seconds is optimal
+    - **Background**: Minimize background noise
+    - **Languages**: English speech only
+    """)
+
+# Disclaimer section
+with st.expander("Important Disclaimers", expanded=False):
+    st.markdown("""
+    **Please Note:**
+    
+    - **Research Tool**: This is a proof-of-concept application for educational and research purposes
+    - **Accuracy Limitations**: Results depend on audio quality, speaker clarity, and model training data
+    - **Bias Considerations**: AI models may have inherent biases based on their training data
+    - **Privacy**: Videos are processed temporarily and not stored permanently
+    - **Internet Required**: Model downloads and video processing require internet connectivity
+    
+    **Not suitable for:**
+    - Critical decision-making processes
+    - Official language assessment
+    - Commercial accent evaluation services
+    """)
+
+st.divider()
+
+# Footer
+footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
+
+with footer_col2:
+    st.markdown("""
+    <div style="text-align: center;">
+        <p><strong>Developed with ❤ by Abdullah Mostafa</strong></p>
+    </div>
+    """, unsafe_allow_html=True)

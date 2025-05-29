@@ -1,6 +1,5 @@
 # Accently - English Accent Analyzer
 
-![Accently Logo](https://remwaste.com/wp-content/uploads/2023/08/REM-Waste-Logo-Dark.png)
 
 Accently is a web application that automatically analyzes English accents from videos using AI. Simply provide a video URL (YouTube, Loom, etc.) or upload a video file, and the application will identify the speaker's accent from among 16 different English accent categories.
 
