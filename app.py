@@ -92,72 +92,83 @@ def cleanup_temp_dir(temp_dir_path):
         except Exception as e:
             st.warning(f"Could not clean up temporary directory {temp_dir_path}: {e}")
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour to avoid redownloading the same video
-def cached_download_video(url):
-    """Cached version of video download to improve performance for repeated URLs"""
-    # Use a more stable temp directory within the Streamlit cache
-    temp_dir = os.path.join(os.getcwd(), ".streamlit", "temp", f"video_{hash(url) % 10000}")
-    os.makedirs(temp_dir, exist_ok=True)
+def download_video(url):
+    """Download video with better error handling and logging"""
+    st.write(f"Downloading video from {url}...")
     
-    output_path = os.path.join(temp_dir, "video.mp4")
+    # Create a unique temporary directory
+    temp_dir = tempfile.mkdtemp(prefix="video_download_")
+    output_path = os.path.join(temp_dir, "video.%(ext)s")
     
-    # If the file already exists and is recent (within 1 hour), use it
-    if os.path.exists(output_path) and (time.time() - os.path.getmtime(output_path)) < 3600:
-        file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-        return output_path, temp_dir, file_size_mb
-    
-    # Set file size limit to 300MB (300 * 1024 * 1024 bytes)
+    # Set file size limit to 300MB
     file_size_limit = 300 * 1024 * 1024
     
-    # Updated options with better format selection and cache management
+    # Updated yt-dlp options with better error handling
     ydl_opts = {
-        'format': 'best[height<=720][filesize<300M]/best[filesize<300M]/best[height<=480]/best',  # More flexible format selection
+        'format': 'best[height<=720][filesize<300M]/best[filesize<300M]/best[height<=480]/worst',
         'outtmpl': output_path,
         'noplaylist': True,
-        'quiet': True,  # Less verbose output
-        'max_filesize': file_size_limit,  # Set maximum file size
-        'no_cache_dir': True,  # Prevent caching issues that cause format errors
-        'extract_flat': False,
-        'ignoreerrors': False
+        'quiet': False,  # Enable verbose output for debugging
+        'no_warnings': False,
+        'extractaudio': False,
+        'max_filesize': file_size_limit,
+        'socket_timeout': 30,
+        'retries': 3,
+        'fragment_retries': 3,
+        'ignoreerrors': False,
+        'no_cache_dir': False,  # Allow caching for better performance
     }
-
+    
     try:
+        start_time = time.time()
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Clear any existing cache before download (if available)
-            if hasattr(ydl, 'cache') and hasattr(ydl.cache, 'remove'):
-                try:
-                    ydl.cache.remove()
-                except:
-                    pass  # Ignore if cache removal fails
+            # Get info first to check if URL is valid
+            try:
+                info = ydl.extract_info(url, download=False)
+                st.write(f"Video found: {info.get('title', 'Unknown Title')}")
+                st.write(f"Duration: {info.get('duration', 'Unknown')} seconds")
+            except Exception as info_e:
+                st.error(f"Failed to extract video info: {str(info_e)}")
+                cleanup_temp_dir(temp_dir)
+                return None, None
             
+            # Now download
             ydl.download([url])
         
-        # Check if file exists and has reasonable size
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:  # At least 10KB
-            file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            return output_path, temp_dir, file_size_mb
-        else:
+        # Find the downloaded file (yt-dlp might change the extension)
+        downloaded_files = [f for f in os.listdir(temp_dir) if f.startswith('video.')]
+        
+        if not downloaded_files:
+            st.error("No file was downloaded")
             cleanup_temp_dir(temp_dir)
-            return None, None, 0
+            return None, None
+        
+        actual_video_path = os.path.join(temp_dir, downloaded_files[0])
+        
+        # Verify file exists and has reasonable size
+        if os.path.exists(actual_video_path) and os.path.getsize(actual_video_path) > 10000:
+            file_size_mb = os.path.getsize(actual_video_path) / (1024 * 1024)
+            download_time = time.time() - start_time
+            st.success(f"Video downloaded successfully! File size: {file_size_mb:.2f} MB (in {download_time:.1f}s)")
+            return actual_video_path, temp_dir
+        else:
+            st.error("Downloaded file is too small or corrupted")
+            cleanup_temp_dir(temp_dir)
+            return None, None
             
-    except Exception as e:
-        print(f"yt-dlp download error: {e}")
+    except yt_dlp.DownloadError as de:
+        st.error(f"yt-dlp download error: {str(de)}")
+        st.error("This could be due to:")
+        st.error("- Video is private or region-blocked")
+        st.error("- Platform has changed their API")
+        st.error("- Network connectivity issues")
         cleanup_temp_dir(temp_dir)
-        return None, None, 0
-
-def download_video(url):
-    """Wrapper for cached download with UI feedback"""
-    st.write(f"Downloading video from {url}...")
-    start_time = time.time()
-    
-    video_path, temp_dir, file_size_mb = cached_download_video(url)
-    
-    if video_path:
-        download_time = time.time() - start_time
-        st.write(f"Video downloaded successfully! File size: {file_size_mb:.2f} MB (in {download_time:.1f}s)")
-        return video_path, temp_dir
-    else:
-        st.error("Failed to download video. Please check the URL and ensure it's publicly accessible.")
+        return None, None
+    except Exception as e:
+        st.error(f"Unexpected error during download: {type(e).__name__}: {str(e)}")
+        st.error("Please check the URL and try again")
+        cleanup_temp_dir(temp_dir)
         return None, None
 
 def extract_audio(video_path, max_duration=60):
@@ -331,6 +342,17 @@ def analyze_accent_speechbrain(audio_path, classifier):
         print(f"Full error: {traceback.format_exc()}")
         return "Error", 0, f"Analysis failed: {e}"
 
+def test_url_connectivity(url):
+    """Test if URL is accessible before attempting download"""
+    try:
+        # Test basic connectivity
+        import urllib.request
+        urllib.request.urlopen(url, timeout=10)
+        return True
+    except Exception as e:
+        st.error(f"URL connectivity test failed: {str(e)}")
+        return False
+
 # --- Streamlit UI ---
 st.title("🎯 Accently")
 st.subheader("AI-Powered English Accent Analysis")
@@ -363,6 +385,24 @@ tab1, tab2 = st.tabs(["Video URL", "Upload Video File"])
 with tab1:
     st.markdown("**Enter a public video URL from platforms like YouTube, Vimeo, or direct MP4 links**")
     
+    # Add troubleshooting section
+    with st.expander("🔧 Troubleshooting URL Issues", expanded=False):
+        st.markdown("""
+        **If URL download isn't working:**
+        
+        1. **Check URL format**: Make sure it's a complete URL (e.g., `https://www.youtube.com/watch?v=...`)
+        2. **Video accessibility**: Ensure the video is public and not region-blocked
+        3. **Try different URLs**: Some platforms may have temporary restrictions
+        4. **Network issues**: Check your internet connection
+        5. **Platform changes**: Video platforms occasionally update their APIs
+        
+        **Supported platforms:**
+        - YouTube
+        - Vimeo  
+        - Direct MP4/video links
+        - Many other video platforms
+        """)
+    
     with st.container():
         video_url = st.text_input(
             "Video URL", 
@@ -370,16 +410,25 @@ with tab1:
             help="Paste any public video URL here. The video will be processed automatically."
         )
         
+        # Add URL validation
+        url_valid = False
+        if video_url:
+            if video_url.startswith(('http://', 'https://')):
+                url_valid = True
+                st.success("✓ Valid URL format")
+            else:
+                st.error("❌ URL must start with http:// or https://")
+        
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             analyze_from_url = st.button(
                 "Analyze Video from URL", 
                 type="primary", 
                 use_container_width=True,
-                disabled=not video_url
+                disabled=not (video_url and url_valid)
             )
     
-    if video_url and analyze_from_url:
+    if video_url and analyze_from_url and url_valid:
         if accent_classifier is None:
             st.error("The accent classification model could not be loaded. Please refresh the page and try again.")
             st.stop()
@@ -394,6 +443,14 @@ with tab1:
                 # Step 1: Download
                 progress_bar = st.progress(0)
                 status_text = st.empty()
+                
+                status_text.text("Testing URL connectivity...")
+                progress_bar.progress(5)
+                
+                # Skip connectivity test for now as it might not work for all platforms
+                # if not test_url_connectivity(video_url):
+                #     st.error("Cannot connect to the provided URL. Please check the URL and try again.")
+                #     st.stop()
                 
                 status_text.text("Downloading video...")
                 progress_bar.progress(10)
@@ -411,7 +468,7 @@ with tab1:
                     # Now display it
                     st.video(video_path)
                 except Exception as video_err:
-                    st.error(f"Could not display video preview: {video_err}")
+                    st.warning(f"Could not display video preview: {video_err}")
                     # Try to continue with audio extraction even if preview fails
                 
                 with progress_container:
@@ -482,6 +539,11 @@ with tab1:
                     st.error("**Audio Extraction Failed** - Could not extract audio from the video.")
             else:
                 st.error("**Download Failed** - Please verify the URL is accessible and try again.")
+                st.info("**Try these solutions:**")
+                st.info("1. Check if the video is public and not region-blocked")
+                st.info("2. Verify the URL is complete and correct")
+                st.info("3. Try a different video URL")
+                st.info("4. Use the file upload option instead")
         
         finally:
             # Cleanup
@@ -500,6 +562,8 @@ with tab1:
                 
     elif not video_url and analyze_from_url:
         st.warning("Please enter a video URL before analyzing.")
+    elif video_url and not url_valid and analyze_from_url:
+        st.error("Please enter a valid URL starting with http:// or https://")
 
 with tab2:
     st.markdown("**Upload a video file directly from your device**")
